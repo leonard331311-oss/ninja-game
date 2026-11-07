@@ -2,8 +2,15 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Ninja Head Roguelike</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Ninja Head Survival</title>
+  <meta name="theme-color" content="#151814">
+  <meta name="description" content="Survive the zombie horde in this quick ninja arena game.">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icon-192.png">
   <style>
     * {
       box-sizing: border-box;
@@ -12,30 +19,135 @@
     body {
       margin: 0;
       min-height: 100vh;
+      min-height: 100dvh;
       display: grid;
       place-items: center;
       background: #151814;
       color: #f4f0dc;
       font-family: Arial, Helvetica, sans-serif;
+      overflow: hidden;
+      overscroll-behavior: none;
+    }
+
+    .game-shell {
+      position: relative;
+      width: min(100vw, 150vh, 1200px);
+      aspect-ratio: 3 / 2;
+      max-height: 100vh;
+      max-height: 100dvh;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
     }
 
     canvas {
-      width: min(100vw, 1200px);
-      height: auto;
-      max-height: 100vh;
+      display: block;
+      width: 100%;
+      height: 100%;
       border: 3px solid #322f25;
       background: #211f1a;
       image-rendering: pixelated;
       box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+      touch-action: none;
+    }
+
+    .touch-controls {
+      display: none;
+      position: absolute;
+      inset: auto 0 14px;
+      align-items: end;
+      justify-content: space-between;
+      padding: 0 20px;
+      pointer-events: none;
+    }
+
+    .joystick, .attack-button {
+      pointer-events: auto;
+      touch-action: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .joystick {
+      width: clamp(100px, 20vw, 150px);
+      height: clamp(100px, 20vw, 150px);
+      border: 2px solid rgba(244, 240, 220, 0.55);
+      border-radius: 50%;
+      background: rgba(8, 8, 8, 0.42);
+      position: relative;
+    }
+
+    .joystick::after {
+      content: "MOVE";
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      color: rgba(244, 240, 220, 0.6);
+      font-size: 12px;
+      font-weight: bold;
+      letter-spacing: 1px;
+      pointer-events: none;
+    }
+
+    .joystick-knob {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 42%;
+      height: 42%;
+      border-radius: 50%;
+      background: rgba(215, 53, 53, 0.82);
+      border: 2px solid rgba(244, 240, 220, 0.8);
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+    }
+
+    .attack-button {
+      width: clamp(82px, 16vw, 118px);
+      height: clamp(82px, 16vw, 118px);
+      border: 3px solid #f4f0dc;
+      border-radius: 50%;
+      background: rgba(199, 31, 47, 0.78);
+      color: #fff8e6;
+      font-size: 15px;
+      font-weight: bold;
+      letter-spacing: 1px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+    }
+
+    .attack-button:active { background: rgba(255, 90, 65, 0.92); }
+
+    @media (pointer: coarse) {
+      .touch-controls { display: flex; }
+    }
+
+    @media (orientation: portrait) and (pointer: coarse) {
+      .touch-controls { bottom: 10px; padding: 0 14px; }
+      .joystick { width: clamp(86px, 24vw, 125px); height: clamp(86px, 24vw, 125px); }
+      .attack-button { width: clamp(72px, 20vw, 100px); height: clamp(72px, 20vw, 100px); }
     }
   </style>
 </head>
 <body>
-  <canvas id="gameCanvas" width="1200" height="800"></canvas>
+  <main class="game-shell" aria-label="Ninja Head Survival game">
+    <canvas id="gameCanvas" width="1200" height="800" aria-label="Game arena. Tap to start, aim and throw stars; use the on-screen controls to move and attack."></canvas>
+    <div class="touch-controls" aria-label="Touch controls">
+      <div class="joystick" id="joystick" role="application" aria-label="Movement joystick">
+        <div class="joystick-knob" id="joystickKnob"></div>
+      </div>
+      <button class="attack-button" id="attackButton" type="button" aria-label="Throw a star at the nearest zombie">ATTACK</button>
+    </div>
+  </main>
 
   <script>
+    // Update this single value for each release, following MAJOR.MINOR.PATCH.
+    const APP_VERSION = "1.0.0";
+    const HIGH_SCORE_KEY = "ninja-head-survival-high-score";
     const canvas = document.getElementById("gameCanvas");
     const ctx = canvas.getContext("2d");
+    const joystick = document.getElementById("joystick");
+    const joystickKnob = document.getElementById("joystickKnob");
+    const attackButton = document.getElementById("attackButton");
 
     const WIDTH = canvas.width;
     const HEIGHT = canvas.height;
@@ -49,6 +161,27 @@
     let spawnTimer = 0;
     let survivalTime = 0;
     let killCount = 0;
+    let highScore = loadHighScore();
+    const touchMove = { x: 0, y: 0 };
+
+    function loadHighScore() {
+      try {
+        const saved = Number.parseInt(localStorage.getItem(HIGH_SCORE_KEY), 10);
+        return Number.isFinite(saved) && saved >= 0 ? saved : 0;
+      } catch (error) {
+        return 0;
+      }
+    }
+
+    function saveHighScore() {
+      if (killCount <= highScore) return;
+      highScore = killCount;
+      try {
+        localStorage.setItem(HIGH_SCORE_KEY, String(highScore));
+      } catch (error) {
+        // The game remains playable when browser storage is disabled or full.
+      }
+    }
 
     class Player {
       constructor() {
@@ -64,10 +197,13 @@
         let dx = 0;
         let dy = 0;
 
-        if (keys.a) dx -= 1;
-        if (keys.d) dx += 1;
-        if (keys.w) dy -= 1;
-        if (keys.s) dy += 1;
+        if (keys.a || keys.arrowleft) dx -= 1;
+        if (keys.d || keys.arrowright) dx += 1;
+        if (keys.w || keys.arrowup) dy -= 1;
+        if (keys.s || keys.arrowdown) dy += 1;
+
+        dx += touchMove.x;
+        dy += touchMove.y;
 
         if (dx !== 0 || dy !== 0) {
           const length = Math.hypot(dx, dy);
@@ -365,6 +501,7 @@
 
       if (player.health < 0) {
         player.health = 0;
+        saveHighScore();
         state = "gameover";
       }
     }
@@ -411,7 +548,7 @@
       const healthPercent = player.health / player.maxHealth;
 
       ctx.fillStyle = "rgba(8, 8, 8, 0.55)";
-      ctx.fillRect(22, 20, 340, 72);
+      ctx.fillRect(22, 20, 340, 92);
 
       ctx.fillStyle = "#f4f0dc";
       ctx.font = "22px Arial";
@@ -431,6 +568,7 @@
       ctx.font = "20px Arial";
       ctx.fillText(`Zombies defeated: ${killCount}`, WIDTH - 240, 40);
       ctx.fillText(`Time: ${Math.floor(survivalTime)}s`, WIDTH - 240, 68);
+      ctx.fillText(`Best: ${highScore}`, WIDTH - 240, 96);
     }
 
     function drawStartScreen() {
@@ -447,12 +585,19 @@
       ctx.fillText("Ninja Head Survival", WIDTH / 2, 350);
 
       ctx.font = "28px Arial";
-      ctx.fillText("Move with A S D W", WIDTH / 2, 415);
-      ctx.fillText("Left click to throw a star toward the mouse", WIDTH / 2, 458);
+      ctx.fillText("Move with W A S D, arrow keys, or the joystick", WIDTH / 2, 415);
+      ctx.fillText("Click or tap the arena to aim and throw", WIDTH / 2, 458);
+      ctx.font = "22px Arial";
+      ctx.fillText(`Personal best: ${highScore} zombies defeated`, WIDTH / 2, 498);
+      ctx.font = "19px Arial";
+      ctx.fillText("Touch tip: press ATTACK to target the nearest zombie", WIDTH / 2, 527);
 
       ctx.fillStyle = "#d73535";
       ctx.font = "34px Arial";
-      ctx.fillText("Press SPACE to start", WIDTH / 2, 540);
+      ctx.fillText("Press SPACE or tap to start", WIDTH / 2, 573);
+      ctx.fillStyle = "#b8b5a7";
+      ctx.font = "18px Arial";
+      ctx.fillText(`Version ${APP_VERSION}`, WIDTH / 2, 755);
       ctx.textAlign = "left";
     }
 
@@ -475,10 +620,12 @@
       ctx.font = "30px Arial";
       ctx.fillText(`You survived ${Math.floor(survivalTime)} seconds`, WIDTH / 2, 395);
       ctx.fillText(`Zombies defeated: ${killCount}`, WIDTH / 2, 438);
+      ctx.font = "24px Arial";
+      ctx.fillText(`Personal best: ${highScore} zombies defeated`, WIDTH / 2, 482);
 
       ctx.fillStyle = "#d73535";
       ctx.font = "32px Arial";
-      ctx.fillText("Press SPACE to try again", WIDTH / 2, 525);
+      ctx.fillText("Press SPACE or tap to play again", WIDTH / 2, 535);
       ctx.textAlign = "left";
     }
 
@@ -566,12 +713,91 @@
       keys[event.key.toLowerCase()] = false;
     });
 
-    canvas.addEventListener("mousedown", event => {
-      if (event.button !== 0 || state !== "playing") return;
+    function throwStarAt(position) {
+      if (state !== "playing") return;
+      stars.push(new ThrowingStar(player.x, player.y, position.x, position.y));
+    }
 
+    function getNearestZombiePosition() {
+      if (!zombies.length) return { x: player.x + 1, y: player.y };
+      let nearest = zombies[0];
+      let nearestDistance = Math.hypot(nearest.x - player.x, nearest.y - player.y);
+      for (const zombie of zombies.slice(1)) {
+        const distance = Math.hypot(zombie.x - player.x, zombie.y - player.y);
+        if (distance < nearestDistance) {
+          nearest = zombie;
+          nearestDistance = distance;
+        }
+      }
+      return { x: nearest.x, y: nearest.y };
+    }
+
+    canvas.addEventListener("pointerdown", event => {
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      if (state === "start" || state === "gameover") {
+        startGame();
+        return;
+      }
+      if (event.target.closest && event.target.closest(".touch-controls")) return;
       const mouse = getMousePosition(event);
-      stars.push(new ThrowingStar(player.x, player.y, mouse.x, mouse.y));
+      throwStarAt(mouse);
     });
+
+    let joystickPointer = null;
+    function updateJoystick(event) {
+      const rect = joystick.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const maxRadius = rect.width * 0.34;
+      let dx = event.clientX - centerX;
+      let dy = event.clientY - centerY;
+      const length = Math.hypot(dx, dy);
+      if (length > maxRadius) {
+        dx = dx / length * maxRadius;
+        dy = dy / length * maxRadius;
+      }
+      touchMove.x = dx / maxRadius;
+      touchMove.y = dy / maxRadius;
+      joystickKnob.style.left = `calc(50% + ${dx}px)`;
+      joystickKnob.style.top = `calc(50% + ${dy}px)`;
+    }
+
+    function resetJoystick() {
+      joystickPointer = null;
+      touchMove.x = 0;
+      touchMove.y = 0;
+      joystickKnob.style.left = "50%";
+      joystickKnob.style.top = "50%";
+    }
+
+    joystick.addEventListener("pointerdown", event => {
+      event.preventDefault();
+      joystickPointer = event.pointerId;
+      joystick.setPointerCapture(event.pointerId);
+      updateJoystick(event);
+    });
+    joystick.addEventListener("pointermove", event => {
+      if (event.pointerId === joystickPointer) updateJoystick(event);
+    });
+    joystick.addEventListener("pointerup", resetJoystick);
+    joystick.addEventListener("pointercancel", resetJoystick);
+    attackButton.addEventListener("pointerdown", event => {
+      event.preventDefault();
+      if (state === "start" || state === "gameover") {
+        startGame();
+      } else {
+        throwStarAt(getNearestZombiePosition());
+      }
+    });
+
+    window.addEventListener("blur", () => {
+      for (const key of Object.keys(keys)) keys[key] = false;
+      resetJoystick();
+    });
+
+    if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+      window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(() => {}));
+    }
 
     drawStartScreen();
     requestAnimationFrame(gameLoop);
